@@ -1,0 +1,119 @@
+services:
+  db:
+    image: postgres:16-alpine
+    container_name: hris_db
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: hris_db
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    ports:
+      - "5433:5432"       # port 5433 di host agar tidak bentrok dengan PG lokal
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d hris_db"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    container_name: hris_redis
+    restart: unless-stopped
+    ports:
+      - "6380:6379"       # port 6380 di host agar tidak bentrok dengan Redis lokal
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  web:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: hris_web
+    restart: unless-stopped
+    command: >
+      sh -c "python manage.py makemigrations --noinput &&
+             python manage.py migrate --noinput &&
+             python manage.py collectstatic --noinput &&
+             python manage.py runserver 0.0.0.0:9000"
+    volumes:
+      - .:/app
+      - media_files:/app/media
+      - static_files:/app/staticfiles
+    ports:
+      - "9000:9000"
+    environment:
+      DJANGO_SETTINGS_MODULE: config.settings.development
+      DB_HOST: db
+      DB_PORT: 5432
+      DB_NAME: hris_db
+      DB_USER: postgres
+      DB_PASSWORD: postgres
+      REDIS_URL: redis://redis:6379/0
+      SECRET_KEY: django-insecure-change-this-before-production-xyz-2024
+      EMAIL_BACKEND: django.core.mail.backends.console.EmailBackend
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  celery_worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: hris_celery_worker
+    restart: unless-stopped
+    command: celery -A config worker -l info --concurrency=2
+    volumes:
+      - .:/app
+    environment:
+      DJANGO_SETTINGS_MODULE: config.settings.development
+      DB_HOST: db
+      DB_PORT: 5432
+      DB_NAME: hris_db
+      DB_USER: postgres
+      DB_PASSWORD: postgres
+      REDIS_URL: redis://redis:6379/0
+      SECRET_KEY: django-insecure-change-this-before-production-xyz-2024
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  celery_beat:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: hris_celery_beat
+    restart: unless-stopped
+    command: celery -A config beat -l info --scheduler django_celery_beat.schedulers:DatabaseScheduler
+    volumes:
+      - .:/app
+    environment:
+      DJANGO_SETTINGS_MODULE: config.settings.development
+      DB_HOST: db
+      DB_PORT: 5432
+      DB_NAME: hris_db
+      DB_USER: postgres
+      DB_PASSWORD: postgres
+      REDIS_URL: redis://redis:6379/0
+      SECRET_KEY: django-insecure-change-this-before-production-xyz-2024
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+volumes:
+  postgres_data:
+  redis_data:
+  media_files:
+  static_files:

@@ -1,0 +1,58 @@
+# ─── Environment Variables & Secrets ──────────────────────────────────────
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.crt
+*.p12
+
+# ─── Documentation & Internal Plans ───────────────────────────────────────
+implementation_plan.md
+task.md
+walkthrough.md
+
+# ─── Python & Bytecode ───────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+
+# ─── Django Uploads, Static & Local DB ────────────────────────────────────
+media/
+staticfiles/
+*.sqlite3
+*.sqlite3-journal
+db.sqlite3
+
+# ─── Virtual Environments ─────────────────────────────────────────────────
+venv/
+env/
+ENV/
+.venv/
+env.bak/
+venv.bak/
+
+# ─── Docker, Database Dumps & Logs ────────────────────────────────────────
+*.log
+docker-data/
+postgres-data/
+*.sql
+*.dump
+*.tar.gz
+
+# ─── IDEs & System Files ──────────────────────────────────────────────────
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+# ─── Testing & Coverage ───────────────────────────────────────────────────
+.coverage
+htmlcov/
+.pytest_cache/
+.mypy_cache/
