@@ -75,8 +75,8 @@ def calculate_payroll_item(period, employee) -> PayrollItem:
     bpjs = calculate_bpjs(basic_salary, total_fixed_allowances)
     bpjs_employee_total = Decimal(str(bpjs['total_employee_bpjs']))
 
-    # 6. PPh21
-    pph21_scheme = getattr(PayrollItem.PPh21Scheme, 'GROSS', 'GROSS')
+    # 6. PPh21 — ambil scheme dari setting karyawan (configurable: GROSS/GROSS_UP/NET)
+    pph21_scheme = getattr(employee, 'pph21_scheme', 'GROSS') or 'GROSS'
     pph21_result = calculate_pph21(
         gross_monthly=gross_salary,
         ptkp_status=employee.ptkp_status,

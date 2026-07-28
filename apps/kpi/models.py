@@ -12,10 +12,15 @@ class KPITemplate(models.Model):
         related_name='kpi_templates', verbose_name='Entitas'
     )
     title = models.CharField(max_length=255, verbose_name='Judul Template KPI')
+    description = models.TextField(blank=True, verbose_name='Deskripsi Template')
     department = models.ForeignKey(
         'employees.Department', on_delete=models.SET_NULL,
         null=True, blank=True, related_name='kpi_templates',
         verbose_name='Departemen'
+    )
+    applicable_positions = models.ManyToManyField(
+        'employees.Position', blank=True,
+        related_name='kpi_templates', verbose_name='Posisi Jabatan yang Berlaku'
     )
     period_type = models.CharField(
         max_length=10, choices=PeriodType.choices,
@@ -33,6 +38,11 @@ class KPITemplate(models.Model):
 
 
 class KPIItem(models.Model):
+    class MeasurementPeriod(models.TextChoices):
+        MONTHLY = 'MONTHLY', 'Bulanan'
+        QUARTERLY = 'QUARTERLY', 'Triwulan'
+        YEARLY = 'YEARLY', 'Tahunan'
+
     template = models.ForeignKey(
         KPITemplate, on_delete=models.CASCADE,
         related_name='items', verbose_name='Template KPI'
@@ -43,6 +53,10 @@ class KPIItem(models.Model):
     weight = models.DecimalField(
         max_digits=5, decimal_places=2, verbose_name='Bobot (%)',
         help_text='Total bobot dalam 1 template idealnya 100%'
+    )
+    measurement_period = models.CharField(
+        max_length=10, choices=MeasurementPeriod.choices,
+        default=MeasurementPeriod.MONTHLY, verbose_name='Periode Pengukuran'
     )
 
     class Meta:
@@ -56,9 +70,15 @@ class KPIItem(models.Model):
 class EmployeeKPIAssignment(models.Model):
     class Status(models.TextChoices):
         DRAFT = 'DRAFT', 'Draft'
+        ACTIVE = 'ACTIVE', 'Aktif'
         SUBMITTED = 'SUBMITTED', 'Diajukan'
         APPROVED = 'APPROVED', 'Disetujui Manager'
         FINAL = 'FINAL', 'Final (Evaluasi Selesai)'
+
+    class Context(models.TextChoices):
+        PRE_TRAINING = 'PRE_TRAINING', 'Pre-Training Snapshot'
+        POST_TRAINING = 'POST_TRAINING', 'Post-Training Evaluation'
+        REGULAR = 'REGULAR', 'Penilaian Rutin'
 
     employee = models.ForeignKey(
         'employees.Employee', on_delete=models.CASCADE,
@@ -77,6 +97,15 @@ class EmployeeKPIAssignment(models.Model):
         max_length=10, choices=Status.choices,
         default=Status.DRAFT, verbose_name='Status'
     )
+    context = models.CharField(
+        max_length=15, choices=Context.choices,
+        default=Context.REGULAR, verbose_name='Konteks Penilaian'
+    )
+    related_training = models.ForeignKey(
+        'training.TrainingProgram', on_delete=models.SET_NULL,
+        null=True, blank=True, related_name='related_kpis',
+        verbose_name='Pelatihan Terkait'
+    )
     final_score = models.DecimalField(
         max_digits=5, decimal_places=2, null=True, blank=True,
         verbose_name='Nilai KPI Akhir (%)'
@@ -88,7 +117,7 @@ class EmployeeKPIAssignment(models.Model):
     class Meta:
         verbose_name = 'Employee KPI Assignment'
         verbose_name_plural = 'Employee KPI Assignments'
-        unique_together = [('employee', 'template', 'period_year', 'period_index')]
+        ordering = ['-period_year', '-period_index']
 
     def __str__(self):
         return f'{self.employee.full_name} — {self.template.title} ({self.period_year}-{self.period_index})'
@@ -111,6 +140,12 @@ class EmployeeKPIResultItem(models.Model):
         max_digits=5, decimal_places=2, default=0,
         verbose_name='Skor Terbobot (%)'
     )
+    notes = models.TextField(blank=True, verbose_name='Catatan Indikator')
+    assessed_by = models.ForeignKey(
+        'employees.Employee', on_delete=models.SET_NULL,
+        null=True, blank=True, related_name='assessed_kpi_results',
+        verbose_name='Dinilai Oleh'
+    )
 
     class Meta:
         verbose_name = 'Employee KPI Result Item'
@@ -118,3 +153,4 @@ class EmployeeKPIResultItem(models.Model):
 
     def __str__(self):
         return f'{self.kpi_item.indicator}: {self.actual_achievement}/{self.kpi_item.target}'
+

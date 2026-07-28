@@ -1,0 +1,36 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+  <meta charset="UTF-8">
+  <title>{{ subject }}</title>
+  <style>
+    body { font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif; background-color: #f4f6f9; color: #333; margin: 0; padding: 20px; }
+    .container { max-width: 600px; margin: 0 auto; background: #ffffff; border-radius: 8px; overflow: hidden; box-shadow: 0 2px 8px rgba(0,0,0,0.05); }
+    .header { background-color: #0f3460; color: #ffffff; padding: 20px 24px; text-align: center; }
+    .header h1 { margin: 0; font-size: 18px; font-weight: 600; }
+    .content { padding: 24px; line-height: 1.6; font-size: 14px; }
+    .footer { background-color: #f0f4ff; text-align: center; padding: 12px; font-size: 12px; color: #666; }
+    .badge { display: inline-block; background: #e0e7ff; color: #3730a3; padding: 4px 8px; border-radius: 4px; font-size: 12px; font-weight: bold; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="header">
+      <h1>PT. Tanimas Resources International — HRIS</h1>
+    </div>
+    <div class="content">
+      <p>Yth. {{ recipient_name|default:"Karyawan / HR Team" }},</p>
+      <p>{{ message_body }}</p>
+      {% if details %}
+        <div style="background:#f8fafc; border-left: 4px solid #0f3460; padding: 12px; margin: 16px 0;">
+          {{ details|safe }}
+        </div>
+      {% endif %}
+      <p>Terima kasih,<br><strong>HR Department</strong><br>PT. Tanimas Resources International</p>
+    </div>
+    <div class="footer">
+      Email ini dikirimkan secara otomatis oleh sistem HRIS. Mohon tidak membalas email ini secara langsung.
+    </div>
+  </div>
+</body>
+</html>

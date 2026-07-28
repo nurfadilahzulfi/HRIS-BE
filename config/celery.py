@@ -17,20 +17,21 @@ app.autodiscover_tasks()
 app.conf.beat_schedule = {
     # Check and send birthday emails every day at 07:00 WIB
     'check-birthdays-daily': {
-        'task': 'apps.notifications.tasks.send_birthday_emails',
+        'task': 'notifications.check_birthdays',
         'schedule': crontab(hour=7, minute=0),
     },
     # Check contract expiry every day at 08:00 WIB
     'check-contract-expiry-daily': {
-        'task': 'apps.notifications.tasks.check_contract_expiry',
+        'task': 'notifications.check_contract_expiry',
         'schedule': crontab(hour=8, minute=0),
     },
     # Remind pending leave approvals every day at 09:00 WIB
     'remind-pending-approvals-daily': {
-        'task': 'apps.notifications.tasks.remind_pending_leave_approvals',
+        'task': 'notifications.remind_pending_approvals',
         'schedule': crontab(hour=9, minute=0),
     },
 }
+
 
 app.conf.timezone = 'Asia/Jakarta'
 

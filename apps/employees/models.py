@@ -146,11 +146,23 @@ class Employee(models.Model):
         default=Status.ACTIVE, verbose_name='Status Karyawan',
     )
 
+    class PPh21Scheme(models.TextChoices):
+        GROSS    = 'GROSS',    'Gross (dipotong dari gaji)'
+        GROSS_UP = 'GROSS_UP', 'Gross Up (ditanggung perusahaan)'
+        NET      = 'NET',      'Net (tidak direfleksikan)'
+
     # ── Pajak & PTKP ───────────────────────────────────────────────
-    npwp        = models.CharField(max_length=25, blank=True, verbose_name='NPWP')
-    ptkp_status = models.CharField(
+    npwp         = models.CharField(max_length=25, blank=True, verbose_name='NPWP')
+    ptkp_status  = models.CharField(
         max_length=5, choices=PTKPStatus.choices,
         default=PTKPStatus.TK0, verbose_name='Status PTKP',
+    )
+    pph21_scheme = models.CharField(
+        max_length=8,
+        choices=PPh21Scheme.choices,
+        default=PPh21Scheme.GROSS,
+        verbose_name='Skema PPh21',
+        help_text='Skema pemotongan PPh21 yang ditanggung karyawan ini',
     )
 
     # ── BPJS ───────────────────────────────────────────────────────
@@ -180,22 +192,16 @@ class Employee(models.Model):
         super().save(*args, **kwargs)
 
     def _generate_employee_id(self) -> str:
-        """Generate ID based on Entity format template."""
+        """Generate unique ID based on Entity format template."""
+        if not self.entity:
+            return f'EMP-{timezone.now().year}-0001'
         year = timezone.now().year
-        prefix = f'{self.entity.code}-{year}-'
-        last = (
-            Employee.objects
-            .filter(entity=self.entity, employee_id__startswith=prefix)
-            .aggregate(max_id=Max('employee_id'))['max_id']
-        )
-        if last:
-            try:
-                sequence = int(last.split('-')[-1]) + 1
-            except (ValueError, IndexError):
-                sequence = 1
-        else:
-            sequence = 1
-        return self.entity.generate_employee_id(year, sequence)
+        sequence = Employee.objects.filter(entity=self.entity).count() + 1
+        while True:
+            candidate = self.entity.generate_employee_id(year, sequence)
+            if not Employee.objects.filter(employee_id=candidate).exists():
+                return candidate
+            sequence += 1
 
     @property
     def age(self):

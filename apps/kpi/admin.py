@@ -13,6 +13,7 @@ class KPITemplateAdmin(admin.ModelAdmin):
     list_filter = ['entity', 'period_type', 'is_active']
     search_fields = ['title']
     inlines = [KPIItemInline]
+    filter_horizontal = ['applicable_positions']
 
 
 class EmployeeKPIResultItemInline(admin.TabularInline):
@@ -23,7 +24,8 @@ class EmployeeKPIResultItemInline(admin.TabularInline):
 
 @admin.register(EmployeeKPIAssignment)
 class EmployeeKPIAssignmentAdmin(admin.ModelAdmin):
-    list_display = ['employee', 'template', 'period_year', 'period_index', 'status', 'final_score']
-    list_filter = ['status', 'period_year']
+    list_display = ['employee', 'template', 'period_year', 'period_index', 'context', 'status', 'final_score']
+    list_filter = ['status', 'context', 'period_year']
     search_fields = ['employee__full_name', 'template__title']
     inlines = [EmployeeKPIResultItemInline]
+

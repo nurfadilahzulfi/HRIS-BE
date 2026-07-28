@@ -44,7 +44,7 @@ class Command(BaseCommand):
 
         # 3. Default Holding & Entity
         company, _ = Company.objects.get_or_create(
-            name='Enterprise Corporate Group',
+            name='PT. Tanimas Group',
             defaults={
                 'address': 'Jakarta, Indonesia',
                 'npwp': '01.234.567.8-012.000',

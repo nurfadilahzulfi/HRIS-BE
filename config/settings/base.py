@@ -185,7 +185,8 @@ EMAIL_PORT = config('EMAIL_PORT', default=587, cast=int)
 EMAIL_USE_TLS = config('EMAIL_USE_TLS', default=True, cast=bool)
 EMAIL_HOST_USER = config('EMAIL_HOST_USER', default='')
 EMAIL_HOST_PASSWORD = config('EMAIL_HOST_PASSWORD', default='')
-DEFAULT_FROM_EMAIL = config('DEFAULT_FROM_EMAIL', default='HRIS System <noreply@hris.com>')
+DEFAULT_FROM_EMAIL = config('DEFAULT_FROM_EMAIL', default='HRIS PT. Tanimas Resources International <noreply@tanimas.co.id>')
+HR_NOTIFICATION_EMAIL = config('HR_NOTIFICATION_EMAIL', default='hr@tanimas.co.id')
 
 # ─── File Upload ─────────────────────────────────────────────────────────────
 FILE_UPLOAD_MAX_MEMORY_SIZE = 10 * 1024 * 1024   # 10MB

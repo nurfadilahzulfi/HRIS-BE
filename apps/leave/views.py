@@ -141,8 +141,8 @@ class LeaveRequestViewSet(viewsets.ModelViewSet):
             return Response({'success': False, 'message': 'Tidak ada permohonan yang perlu disetujui.'}, status=400)
 
         notes = request.data.get('notes', '')
-        approval.status  = LeaveApproval.Status.APPROVED
-        approval.notes   = notes
+        approval.status   = LeaveApproval.Status.APPROVED
+        approval.notes    = notes
         approval.acted_at = timezone.now()
         approval.save()
 
@@ -202,3 +202,42 @@ class LeaveRequestViewSet(viewsets.ModelViewSet):
         qs = LeaveRequest.objects.filter(id__in=pending_ids).select_related('employee', 'leave_type')
         serializer = LeaveRequestListSerializer(qs, many=True)
         return Response({'success': True, 'count': qs.count(), 'data': serializer.data})
+
+    @extend_schema(
+        summary='Get leave calendar events',
+        parameters=[
+            OpenApiParameter('month', int, description='Month (1-12)'),
+            OpenApiParameter('year', int, description='Year (e.g. 2024)')
+        ]
+    )
+    @action(detail=False, methods=['get'], url_path='calendar')
+    def calendar(self, request):
+        now = timezone.now()
+        month = int(request.query_params.get('month', now.month))
+        year = int(request.query_params.get('year', now.year))
+
+        qs = self.get_queryset().filter(
+            start_date__year=year,
+            start_date__month=month
+        ).select_related('employee', 'leave_type')
+
+        events = []
+        for req in qs:
+            events.append({
+                'id': req.id,
+                'employee_id': req.employee.id,
+                'employee_name': req.employee.full_name,
+                'leave_type': req.leave_type.name,
+                'start_date': str(req.start_date),
+                'end_date': str(req.end_date),
+                'total_days': float(req.total_days),
+                'status': req.status
+            })
+
+        return Response({
+            'success': True,
+            'month': month,
+            'year': year,
+            'count': len(events),
+            'data': events
+        })

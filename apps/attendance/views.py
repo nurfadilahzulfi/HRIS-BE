@@ -90,7 +90,6 @@ class AttendanceLogViewSet(viewsets.ModelViewSet):
         serializer.is_valid(raise_exception=True)
         data = serializer.validated_data
 
-        # Resolve employee by employee_id or NIK
         emp_id = data['employee_id']
         try:
             employee = Employee.objects.get(employee_id=emp_id)
@@ -103,7 +102,6 @@ class AttendanceLogViewSet(viewsets.ModelViewSet):
                     status=status.HTTP_404_NOT_FOUND,
                 )
 
-        # Upsert attendance log
         log, created = AttendanceLog.objects.update_or_create(
             employee=employee,
             date=data['date'],
@@ -124,11 +122,78 @@ class AttendanceLogViewSet(viewsets.ModelViewSet):
         }, status=status.HTTP_201_CREATED if created else status.HTTP_200_OK)
 
     @extend_schema(
+        summary='Bulk import attendance from JSON list (CSV/finger export)',
+        description=(
+            'Import multiple attendance records at once. '
+            'Accepts a JSON array with keys: employee_id, date, check_in, '
+            'check_out, source, notes, raw_data. '
+            'employee_id may be the Employee ID string (e.g. HO-2024-0001) or NIK.'
+        ),
+    )
+    @action(detail=False, methods=['post'], url_path='import', permission_classes=[permissions.IsAuthenticated])
+    def bulk_import(self, request):
+        """POST /api/attendance/logs/import/ — bulk upsert attendance records."""
+        records = request.data if isinstance(request.data, list) else request.data.get('records', [])
+
+        if not records:
+            return Response({'success': False, 'message': 'Tidak ada data untuk diimport.'}, status=400)
+
+        imported, skipped, errors = 0, 0, []
+
+        for idx, rec in enumerate(records):
+            ser = AttendanceSyncSerializer(data=rec)
+            if not ser.is_valid():
+                errors.append({'index': idx, 'errors': ser.errors})
+                skipped += 1
+                continue
+
+            data = ser.validated_data
+            emp_id = data['employee_id']
+
+            employee = None
+            for lookup in [{'employee_id': emp_id}, {'nik': emp_id}]:
+                try:
+                    employee = Employee.objects.get(**lookup)
+                    break
+                except Employee.DoesNotExist:
+                    continue
+
+            if not employee:
+                errors.append({'index': idx, 'employee_id': emp_id, 'error': 'Karyawan tidak ditemukan'})
+                skipped += 1
+                continue
+
+            try:
+                AttendanceLog.objects.update_or_create(
+                    employee=employee,
+                    date=data['date'],
+                    defaults={
+                        'check_in':  data.get('check_in'),
+                        'check_out': data.get('check_out'),
+                        'source':    data.get('source', 'MANUAL'),
+                        'notes':     data.get('notes', ''),
+                        'raw_data':  data.get('raw_data'),
+                    },
+                )
+                imported += 1
+            except Exception as e:
+                errors.append({'index': idx, 'employee_id': emp_id, 'error': str(e)})
+                skipped += 1
+
+        return Response({
+            'success': True,
+            'imported': imported,
+            'skipped': skipped,
+            'errors': errors,
+            'message': f'Import selesai: {imported} record berhasil, {skipped} dilewati.',
+        })
+
+    @extend_schema(
         summary='Get attendance summary for a month',
         parameters=[
             OpenApiParameter('month', int, description='Month (1–12)'),
             OpenApiParameter('year',  int, description='Year (e.g. 2024)'),
-            OpenApiParameter('employee_id', int, description='Filter by employee ID'),
+            OpenApiParameter('employee_id', int, description='Filter by employee DB id'),
         ],
     )
     @action(detail=False, methods=['get'], url_path=r'summary/(?P<month>\d+)/(?P<year>\d+)')
