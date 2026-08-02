@@ -15,7 +15,7 @@ class Contract(models.Model):
 
     employee      = models.ForeignKey(
         'employees.Employee',
-        on_delete=models.CASCADE,
+        on_delete=models.PROTECT,
         related_name='contracts',
         verbose_name='Karyawan',
     )
@@ -69,11 +69,35 @@ class Contract(models.Model):
         delta = self.end_date - timezone.now().date()
         return delta.days
 
+    def clean(self):
+        from django.core.exceptions import ValidationError
+        if self.status == self.Status.ACTIVE and self.employee_id:
+            conflicting = Contract.objects.filter(
+                employee=self.employee, status=self.Status.ACTIVE
+            ).exclude(pk=self.pk)
+            if conflicting.exists():
+                raise ValidationError(
+                    "Karyawan ini sudah memiliki kontrak aktif lain. "
+                    "Ubah status kontrak lama menjadi RENEWED/TERMINATED/EXPIRED terlebih dahulu."
+                )
+
+        if self.contract_type != self.ContractType.PKWTT and not self.end_date:
+            raise ValidationError(
+                f"Kontrak tipe {self.get_contract_type_display()} wajib memiliki tanggal berakhir."
+            )
+
+        if self.end_date and self.start_date and self.end_date < self.start_date:
+            raise ValidationError("Tanggal berakhir tidak boleh lebih awal dari tanggal mulai.")
+
+    def save(self, *args, **kwargs):
+        self.full_clean()
+        super().save(*args, **kwargs)
+
 
 class ContractRenewal(models.Model):
     original_contract = models.ForeignKey(
         Contract,
-        on_delete=models.CASCADE,
+        on_delete=models.PROTECT,
         related_name='renewals',
         verbose_name='Kontrak Asal',
     )

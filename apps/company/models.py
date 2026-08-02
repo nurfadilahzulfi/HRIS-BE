@@ -33,6 +33,7 @@ class Entity(models.Model):
     npwp    = models.CharField(max_length=30, blank=True, verbose_name='NPWP')
     phone   = models.CharField(max_length=20, blank=True, verbose_name='Telepon')
     email   = models.EmailField(blank=True, verbose_name='Email')
+    employee_id_last_sequence = models.PositiveIntegerField(default=0)
 
     # Payroll & Leave configuration per entity
     payroll_cutoff_day = models.PositiveSmallIntegerField(
@@ -81,3 +82,15 @@ class Entity(models.Model):
             .replace('{YEAR}', str(year))
             .replace('{SEQ}', seq_str)
         )
+
+    def next_employee_sequence(self) -> int:
+        """
+        Increment counter secara atomic dengan row lock, supaya aman
+        dipanggil dari banyak request bersamaan tanpa race condition.
+        WAJIB dipanggil di dalam transaction.atomic().
+        """
+        Entity.objects.filter(pk=self.pk).update(
+            employee_id_last_sequence=models.F("employee_id_last_sequence") + 1
+        )
+        self.refresh_from_db(fields=["employee_id_last_sequence"])
+        return self.employee_id_last_sequence

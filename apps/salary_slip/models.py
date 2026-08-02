@@ -24,7 +24,7 @@ class SignatureConfig(models.Model):
 
 class SalarySlip(models.Model):
     payroll_item = models.OneToOneField(
-        'payroll.PayrollItem', on_delete=models.CASCADE,
+        'payroll.PayrollItem', on_delete=models.PROTECT,
         related_name='salary_slip', verbose_name='Payroll Item',
     )
     slip_number  = models.CharField(

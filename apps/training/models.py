@@ -76,7 +76,7 @@ class TrainingParticipant(models.Model):
         related_name='participants', verbose_name='Program Pelatihan'
     )
     employee = models.ForeignKey(
-        'employees.Employee', on_delete=models.CASCADE,
+        'employees.Employee', on_delete=models.PROTECT,
         related_name='training_participations', verbose_name='Karyawan'
     )
     status = models.CharField(
@@ -102,7 +102,6 @@ class TrainingParticipant(models.Model):
     )
     notes = models.TextField(blank=True, verbose_name='Catatan Evaluasi')
     registered_at = models.DateTimeField(auto_now_add=True, verbose_name='Waktu Pendaftaran')
-    created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
         verbose_name = 'Training Participant'
@@ -111,4 +110,21 @@ class TrainingParticipant(models.Model):
 
     def __str__(self):
         return f'{self.employee.full_name} — {self.program.title}'
+
+    def clean(self):
+        from django.core.exceptions import ValidationError
+        if self.attendance == self.Attendance.ABSENT and self.status == self.Status.PASSED:
+            raise ValidationError("Peserta yang tidak hadir (ABSENT) tidak dapat dinyatakan LULUS.")
+
+        if not self.pk and self.program_id and self.program.max_participants > 0:
+            current_count = self.program.participants.count()
+            if current_count >= self.program.max_participants:
+                raise ValidationError(
+                    f"Kapasitas peserta untuk program '{self.program.title}' sudah penuh "
+                    f"(Maks: {self.program.max_participants})."
+                )
+
+    def save(self, *args, **kwargs):
+        self.full_clean()
+        super().save(*args, **kwargs)
 

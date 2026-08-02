@@ -42,18 +42,6 @@ class User(AbstractBaseUser, PermissionsMixin):
         verbose_name='Role',
     )
 
-    # Linked to employee profile (set after employee is created)
-    # NOTE: Uses string reference to avoid circular import — Employee model
-    # is defined in apps.employees which is registered after apps.core.
-    employee   = models.OneToOneField(
-        'employees.Employee',
-        on_delete=models.SET_NULL,
-        null=True,
-        blank=True,
-        related_name='user_account',
-        verbose_name='Employee',
-    )
-
     # Scoped to a specific entity for access control
     entity     = models.ForeignKey(
         'company.Entity',
@@ -82,9 +70,18 @@ class User(AbstractBaseUser, PermissionsMixin):
         return self.email
 
     @property
+    def employee(self):
+        """
+        Reverse accessor to Employee via Employee.user (related_name='employee_profile').
+        Ensures backward compatibility for any existing views/serializers accessing user.employee.
+        """
+        return getattr(self, 'employee_profile', None)
+
+    @property
     def full_name(self):
-        if self.employee:
-            return self.employee.full_name
+        emp = self.employee
+        if emp:
+            return emp.full_name
         return self.email
 
     @property

@@ -1,3 +1,4 @@
+from decimal import Decimal, ROUND_HALF_UP
 from django.db import models
 
 
@@ -74,7 +75,7 @@ class OvertimeRecord(models.Model):
         HOLIDAY = 'HOLIDAY', 'Hari Nasional'
 
     employee        = models.ForeignKey(
-        'employees.Employee', on_delete=models.CASCADE,
+        'employees.Employee', on_delete=models.PROTECT,
         related_name='overtime_records', verbose_name='Karyawan',
     )
     date            = models.DateField(verbose_name='Tanggal Lembur')
@@ -109,30 +110,38 @@ class OvertimeRecord(models.Model):
     def __str__(self):
         return f'{self.employee.full_name} — {self.date} ({self.hours_worked} jam)'
 
-    def calculate_amount(self, monthly_salary: float) -> float:
+    def calculate_amount(self, monthly_salary: Decimal) -> Decimal:
         """
-        Hitung lembur sesuai aturan Ketenagakerjaan Indonesia:
-        Tarif per jam = (1/173) × gaji sebulan
-        Hari kerja biasa : jam ke-1 = 1.5×, jam ke-2+ = 2×
-        Hari libur/nasional: jam ke-1 s/d 8 = 2×, jam ke-9 = 3×, jam ke-10+ = 4×
+        Hitung lembur sesuai Kepmenakertrans No. 102/2004.
+        PENTING: seluruh aritmatika memakai Decimal untuk presisi finansial.
         """
-        hourly_rate = monthly_salary / 173
-        hours = float(self.hours_worked)
+        if not isinstance(monthly_salary, Decimal):
+            monthly_salary = Decimal(str(monthly_salary))
+
+        hourly_rate = monthly_salary / Decimal("173")
+        hours = Decimal(str(self.hours_worked))
 
         if self.overtime_type == self.OvertimeType.WEEKDAY:
-            if hours <= 1:
-                total = hourly_rate * 1.5 * hours
+            if hours <= Decimal("1"):
+                total = hourly_rate * Decimal("1.5") * hours
             else:
-                total = (hourly_rate * 1.5) + (hourly_rate * 2 * (hours - 1))
+                total = (hourly_rate * Decimal("1.5")) + (hourly_rate * Decimal("2") * (hours - Decimal("1")))
         else:  # WEEKEND / HOLIDAY
-            if hours <= 8:
-                total = hourly_rate * 2 * hours
-            elif hours == 9:
-                total = (hourly_rate * 2 * 8) + (hourly_rate * 3)
+            if hours <= Decimal("8"):
+                total = hourly_rate * Decimal("2") * hours
+            elif hours == Decimal("9"):
+                total = (hourly_rate * Decimal("2") * Decimal("8")) + (hourly_rate * Decimal("3"))
             else:
-                total = (hourly_rate * 2 * 8) + (hourly_rate * 3) + (hourly_rate * 4 * (hours - 9))
+                total = (hourly_rate * Decimal("2") * Decimal("8")) + (hourly_rate * Decimal("3")) + (hourly_rate * Decimal("4") * (hours - Decimal("9")))
 
-        return round(total, 2)
+        return total.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+
+    def save(self, *args, **kwargs):
+        if (not self.amount or self.amount == Decimal("0")) and self.employee_id:
+            active_contract = self.employee.contracts.filter(status='ACTIVE').first()
+            if active_contract and active_contract.salary_base:
+                self.amount = self.calculate_amount(active_contract.salary_base)
+        super().save(*args, **kwargs)
 
 
 class PayrollPeriod(models.Model):
@@ -182,7 +191,7 @@ class PayrollItem(models.Model):
         related_name='items', verbose_name='Periode',
     )
     employee         = models.ForeignKey(
-        'employees.Employee', on_delete=models.CASCADE,
+        'employees.Employee', on_delete=models.PROTECT,
         related_name='payroll_items', verbose_name='Karyawan',
     )
     pph21_scheme     = models.CharField(

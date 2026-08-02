@@ -8,7 +8,9 @@
 *.p12
 
 # ─── Documentation & Internal Plans ───────────────────────────────────────
-implementation_plan.md
+implementation_plan_backend.md
+implementation_plan_frontend.md
+AUDIT MODELS.md
 task.md
 walkthrough.md
 

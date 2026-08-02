@@ -1,12 +1,14 @@
+from django.core.validators import RegexValidator
 from django.db import models
 from django.db.models import Max
 from django.utils import timezone
+from django.db import transaction
 
 
 class Department(models.Model):
     entity = models.ForeignKey(
         'company.Entity',
-        on_delete=models.CASCADE,
+        on_delete=models.PROTECT,
         related_name='departments',
         verbose_name='Entitas',
     )
@@ -37,7 +39,7 @@ class Department(models.Model):
 class Position(models.Model):
     department  = models.ForeignKey(
         Department,
-        on_delete=models.CASCADE,
+        on_delete=models.PROTECT,
         related_name='positions',
         verbose_name='Departemen',
     )
@@ -92,6 +94,14 @@ class Employee(models.Model):
         related_name='employees',
         verbose_name='Entitas',
     )
+    user        = models.OneToOneField(
+        'core.User',
+        on_delete=models.SET_NULL,
+        null=True, blank=True,
+        related_name='employee_profile',
+        verbose_name='Akun Login (User)',
+        help_text='Hubungkan ke akun login karyawan ini.',
+    )
     employee_id = models.CharField(
         max_length=30, unique=True, blank=True,
         verbose_name='ID Karyawan',
@@ -100,7 +110,11 @@ class Employee(models.Model):
 
     # ── Data Pribadi ───────────────────────────────────────────────
     full_name      = models.CharField(max_length=255, verbose_name='Nama Lengkap')
-    nik            = models.CharField(max_length=16, unique=True, verbose_name='NIK KTP')
+    nik            = models.CharField(
+        max_length=16, unique=True,
+        validators=[RegexValidator(r'^\d{16}$', 'NIK harus 16 digit angka')],
+        verbose_name='NIK KTP'
+    )
     gender         = models.CharField(max_length=1, choices=Gender.choices, verbose_name='Jenis Kelamin')
     date_of_birth  = models.DateField(verbose_name='Tanggal Lahir')
     place_of_birth = models.CharField(max_length=100, blank=True, verbose_name='Tempat Lahir')
@@ -181,27 +195,25 @@ class Employee(models.Model):
         verbose_name        = 'Employee'
         verbose_name_plural = 'Employees'
         ordering            = ['full_name']
+        indexes             = [
+            models.Index(fields=['status', 'department', 'entity']),
+            models.Index(fields=['status']),
+            models.Index(fields=['entity']),
+        ]
 
     def __str__(self):
         return f'{self.employee_id} — {self.full_name}'
 
     def save(self, *args, **kwargs):
-        """Auto-generate employee_id if not set."""
-        if not self.employee_id:
-            self.employee_id = self._generate_employee_id()
+        if not self.employee_id and self.entity:
+            with transaction.atomic():
+                # select_for_update mengunci baris Entity ini sampai transaksi selesai,
+                # jadi request lain yang mau generate ID untuk entity yang sama
+                # akan antre, bukan balapan.
+                entity = type(self.entity).objects.select_for_update().get(pk=self.entity.pk)
+                sequence = entity.next_employee_sequence()
+                self.employee_id = entity.generate_employee_id(timezone.now().year, sequence)
         super().save(*args, **kwargs)
-
-    def _generate_employee_id(self) -> str:
-        """Generate unique ID based on Entity format template."""
-        if not self.entity:
-            return f'EMP-{timezone.now().year}-0001'
-        year = timezone.now().year
-        sequence = Employee.objects.filter(entity=self.entity).count() + 1
-        while True:
-            candidate = self.entity.generate_employee_id(year, sequence)
-            if not Employee.objects.filter(employee_id=candidate).exists():
-                return candidate
-            sequence += 1
 
     @property
     def age(self):

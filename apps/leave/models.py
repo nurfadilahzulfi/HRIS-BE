@@ -82,7 +82,7 @@ class LeaveRequest(models.Model):
 
     employee    = models.ForeignKey(
         'employees.Employee',
-        on_delete=models.CASCADE,
+        on_delete=models.PROTECT,
         related_name='leave_requests',
         verbose_name='Karyawan',
     )
@@ -123,6 +123,17 @@ class LeaveRequest(models.Model):
     def __str__(self):
         return f'{self.employee.full_name} — {self.leave_type.name} ({self.start_date} s/d {self.end_date})'
 
+    def clean(self):
+        from django.core.exceptions import ValidationError
+        if self.start_date and self.end_date and self.end_date < self.start_date:
+            raise ValidationError("Tanggal selesai cuti tidak boleh lebih awal dari tanggal mulai.")
+        if self.total_days is not None and self.total_days <= 0:
+            raise ValidationError("Jumlah hari cuti harus lebih dari 0.")
+
+    def save(self, *args, **kwargs):
+        self.full_clean()
+        super().save(*args, **kwargs)
+
 
 class LeaveApproval(models.Model):
     class Status(models.TextChoices):
@@ -138,7 +149,7 @@ class LeaveApproval(models.Model):
     )
     approver      = models.ForeignKey(
         'employees.Employee',
-        on_delete=models.CASCADE,
+        on_delete=models.PROTECT,
         related_name='leave_approvals',
         verbose_name='Approver',
     )

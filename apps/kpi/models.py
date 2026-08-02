@@ -81,7 +81,7 @@ class EmployeeKPIAssignment(models.Model):
         REGULAR = 'REGULAR', 'Penilaian Rutin'
 
     employee = models.ForeignKey(
-        'employees.Employee', on_delete=models.CASCADE,
+        'employees.Employee', on_delete=models.PROTECT,
         related_name='kpi_assignments', verbose_name='Karyawan'
     )
     template = models.ForeignKey(

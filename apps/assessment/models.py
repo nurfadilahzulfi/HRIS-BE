@@ -88,7 +88,7 @@ class AssessmentAttempt(models.Model):
         related_name='attempts', verbose_name='Asesmen'
     )
     employee = models.ForeignKey(
-        'employees.Employee', on_delete=models.CASCADE,
+        'employees.Employee', on_delete=models.PROTECT,
         related_name='assessment_attempts', verbose_name='Karyawan'
     )
     started_at = models.DateTimeField(auto_now_add=True, verbose_name='Waktu Mulai')
@@ -107,4 +107,14 @@ class AssessmentAttempt(models.Model):
 
     def __str__(self):
         return f'{self.employee.full_name} — {self.assessment.title} ({self.score or "Pending"}%)'
+
+    def clean(self):
+        from django.core.exceptions import ValidationError
+        if self.participant_id and self.employee_id:
+            if self.participant.employee_id != self.employee_id:
+                raise ValidationError("Karyawan tidak cocok dengan peserta pelatihan yang dipilih.")
+
+    def save(self, *args, **kwargs):
+        self.full_clean()
+        super().save(*args, **kwargs)
 

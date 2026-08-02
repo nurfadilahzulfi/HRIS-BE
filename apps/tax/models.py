@@ -44,10 +44,40 @@ class PPh21Bracket(models.Model):
         return f'{self.year}: {self.income_from:,.0f}–{self.income_to or "∞"} → {self.rate}%'
 
 
+class PPh21TERRate(models.Model):
+    """
+    Tabel TER (Tarif Efektif Rata-rata) sesuai PMK 168/2023, dipakai untuk
+    pemotongan bulanan Januari-November. Bulan Desember memakai PPh21Bracket
+    (Pasal 17) untuk rekonsiliasi tahunan.
+    """
+    class Category(models.TextChoices):
+        A = 'A', 'Kategori A'
+        B = 'B', 'Kategori B'
+        C = 'C', 'Kategori C'
+
+    year         = models.PositiveSmallIntegerField(verbose_name='Tahun Pajak')
+    category     = models.CharField(max_length=1, choices=Category.choices, verbose_name='Kategori TER')
+    income_from  = models.DecimalField(max_digits=20, decimal_places=2, verbose_name='Bruto Dari (Rp)')
+    income_to    = models.DecimalField(
+        max_digits=20, decimal_places=2, null=True, blank=True,
+        verbose_name='Bruto Sampai (Rp)', help_text='Kosongkan untuk bracket tertinggi',
+    )
+    rate_percent = models.DecimalField(max_digits=5, decimal_places=3, verbose_name='Tarif (%)')
+
+    class Meta:
+        verbose_name        = 'PPh21 TER Rate'
+        verbose_name_plural = 'PPh21 TER Rates'
+        unique_together     = [('year', 'category', 'income_from')]
+        ordering            = ['year', 'category', 'income_from']
+
+    def __str__(self):
+        return f'{self.year} Kat {self.category}: {self.income_from:,.0f}–{self.income_to or "∞"} → {self.rate_percent}%'
+
+
 class TaxCalculationLog(models.Model):
     """Audit trail kalkulasi PPh21 per payroll item."""
     payroll_item   = models.OneToOneField(
-        'payroll.PayrollItem', on_delete=models.CASCADE,
+        'payroll.PayrollItem', on_delete=models.PROTECT,
         related_name='tax_log', verbose_name='Payroll Item',
     )
     scheme         = models.CharField(max_length=8, verbose_name='Skema PPh21')
