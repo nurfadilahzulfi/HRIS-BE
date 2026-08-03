@@ -2,17 +2,10 @@ from rest_framework import viewsets, permissions
 from rest_framework.parsers import MultiPartParser, FormParser, JSONParser
 from drf_spectacular.utils import extend_schema
 
+from apps.core.permissions import IsHROrReadOnly
 from apps.core.pagination import StandardResultsPagination
 from .models import Company, Entity
 from .serializers import CompanySerializer, EntitySerializer
-
-
-class IsHROrReadOnly(permissions.BasePermission):
-    """HR and above can write; others are read-only."""
-    def has_permission(self, request, view):
-        if request.method in permissions.SAFE_METHODS:
-            return request.user.is_authenticated
-        return request.user.is_authenticated and request.user.is_hr
 
 
 @extend_schema(tags=['company'])

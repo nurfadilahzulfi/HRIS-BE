@@ -1,23 +1,19 @@
-from rest_framework import viewsets, permissions, status
+from django.db import transaction
+from django.utils import timezone
+from rest_framework import viewsets, permissions, status, serializers
 from rest_framework.decorators import action
 from rest_framework.response import Response
 from django_filters.rest_framework import DjangoFilterBackend
 from rest_framework.filters import SearchFilter
 from drf_spectacular.utils import extend_schema
-from django.utils import timezone
 
+from apps.core.permissions import IsHROrReadOnly
 from apps.core.pagination import StandardResultsPagination
 from .models import Assessment, Question, Choice, AssessmentAttempt
 from .serializers import (
-    AssessmentSerializer, QuestionSerializer, ChoiceSerializer, AssessmentAttemptSerializer
+    AssessmentSerializer, QuestionSerializer, QuestionTakeSerializer,
+    ChoiceSerializer, AssessmentAttemptSerializer
 )
-
-
-class IsHROrReadOnly(permissions.BasePermission):
-    def has_permission(self, request, view):
-        if request.method in permissions.SAFE_METHODS:
-            return request.user.is_authenticated
-        return request.user.is_authenticated and request.user.is_hr
 
 
 @extend_schema(tags=['assessment'])
@@ -40,7 +36,7 @@ class AssessmentViewSet(viewsets.ModelViewSet):
     @action(detail=True, methods=['post'], url_path='start', permission_classes=[permissions.IsAuthenticated])
     def start_assessment(self, request, pk=None):
         assessment = self.get_object()
-        employee = getattr(request.user, 'employee', None)
+        employee = getattr(request.user, 'employee_profile', None) or getattr(request.user, 'employee', None)
         if not employee:
             return Response({'success': False, 'message': 'User tidak terhubung dengan profil karyawan.'}, status=status.HTTP_400_BAD_REQUEST)
 
@@ -66,7 +62,7 @@ class AssessmentViewSet(viewsets.ModelViewSet):
             'success': True,
             'message': 'Ujian berhasil dimulai.',
             'attempt': serializer.data,
-            'questions': QuestionSerializer(assessment.questions.all(), many=True).data
+            'questions': QuestionTakeSerializer(assessment.questions.all(), many=True).data
         }, status=status.HTTP_201_CREATED if not active_attempt else status.HTTP_200_OK)
 
 
@@ -110,13 +106,17 @@ class AssessmentAttemptViewSet(viewsets.ModelViewSet):
     @action(detail=True, methods=['post'], url_path='submit')
     def submit_attempt(self, request, pk=None):
         attempt = self.get_object()
+        employee = getattr(request.user, 'employee_profile', None) or getattr(request.user, 'employee', None)
+        if request.user.role == 'EMPLOYEE' and employee and attempt.employee_id != employee.id:
+            return Response({'success': False, 'message': 'Tidak bisa submit ujian milik orang lain.'}, status=status.HTTP_403_FORBIDDEN)
         if attempt.submitted_at:
             return Response({'success': False, 'message': 'Ujian ini sudah disubmit sebelumnya.'}, status=status.HTTP_400_BAD_REQUEST)
 
-        answers = request.data.get('answers', {})
-        attempt.answers = answers
-        attempt.submitted_at = timezone.now()
-        self._grade_attempt(attempt)
+        with transaction.atomic():
+            answers = request.data.get('answers', {})
+            attempt.answers = answers
+            attempt.submitted_at = timezone.now()
+            self._grade_attempt(attempt)
 
         serializer = AssessmentAttemptSerializer(attempt)
         return Response({
@@ -126,8 +126,15 @@ class AssessmentAttemptViewSet(viewsets.ModelViewSet):
         })
 
     def perform_create(self, serializer):
-        attempt = serializer.save(submitted_at=timezone.now())
-        self._grade_attempt(attempt)
+        employee = getattr(self.request.user, 'employee_profile', None) or getattr(self.request.user, 'employee', None)
+        if not employee and self.request.user.role == 'EMPLOYEE':
+            raise serializers.ValidationError('User tidak terhubung ke profil karyawan.')
+        with transaction.atomic():
+            kwargs = {'submitted_at': timezone.now()}
+            if employee:
+                kwargs['employee'] = employee
+            attempt = serializer.save(**kwargs)
+            self._grade_attempt(attempt)
 
     def _grade_attempt(self, attempt):
         assessment = attempt.assessment
@@ -136,6 +143,9 @@ class AssessmentAttemptViewSet(viewsets.ModelViewSet):
         earned_points = 0
 
         for q in questions:
+            if q.question_type == Question.QuestionType.ESSAY:
+                # Skip auto-grading choice check for Essay questions
+                continue
             user_choice_id = attempt.answers.get(str(q.id))
             if not user_choice_id:
                 continue

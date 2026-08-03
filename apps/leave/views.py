@@ -1,5 +1,6 @@
+from django.db import transaction
 from django.utils import timezone
-from rest_framework import viewsets, permissions, status
+from rest_framework import viewsets, permissions, status, serializers
 from rest_framework.decorators import action
 from rest_framework.response import Response
 from rest_framework.parsers import MultiPartParser, FormParser, JSONParser
@@ -7,6 +8,7 @@ from django_filters.rest_framework import DjangoFilterBackend
 from rest_framework.filters import SearchFilter, OrderingFilter
 from drf_spectacular.utils import extend_schema, OpenApiParameter
 
+from apps.core.permissions import IsHROrReadOnly
 from apps.core.pagination import StandardResultsPagination
 from .models import LeaveType, LeaveBalance, LeaveRequest, LeaveApproval
 from .serializers import (
@@ -16,13 +18,6 @@ from .serializers import (
     LeaveRequestListSerializer,
     ApproveRejectSerializer,
 )
-
-
-class IsHROrReadOnly(permissions.BasePermission):
-    def has_permission(self, request, view):
-        if request.method in permissions.SAFE_METHODS:
-            return request.user.is_authenticated
-        return request.user.is_authenticated and request.user.is_hr
 
 
 @extend_schema(tags=['leave'])
@@ -45,7 +40,7 @@ class LeaveTypeViewSet(viewsets.ModelViewSet):
 @extend_schema(tags=['leave'])
 class LeaveBalanceViewSet(viewsets.ModelViewSet):
     serializer_class   = LeaveBalanceSerializer
-    permission_classes = [permissions.IsAuthenticated]
+    permission_classes = [IsHROrReadOnly]
     pagination_class   = StandardResultsPagination
     filter_backends    = [DjangoFilterBackend, OrderingFilter]
     filterset_fields   = ['employee', 'leave_type', 'year']
@@ -60,10 +55,11 @@ class LeaveBalanceViewSet(viewsets.ModelViewSet):
     @extend_schema(summary="Get current user's leave balances")
     @action(detail=False, methods=['get'], url_path='me')
     def my_balances(self, request):
-        if not hasattr(request.user, 'employee') or not request.user.employee:
+        user_emp = getattr(request.user, 'employee_profile', None) or getattr(request.user, 'employee', None)
+        if not user_emp:
             return Response({'success': False, 'message': 'User tidak terhubung ke profil karyawan.'}, status=400)
         year = request.query_params.get('year', timezone.now().year)
-        balances = LeaveBalance.objects.filter(employee=request.user.employee, year=year)
+        balances = LeaveBalance.objects.filter(employee=user_emp, year=year)
         serializer = LeaveBalanceSerializer(balances, many=True)
         return Response({'success': True, 'data': serializer.data})
 
@@ -84,9 +80,10 @@ class LeaveRequestViewSet(viewsets.ModelViewSet):
         qs = LeaveRequest.objects.select_related(
             'employee', 'leave_type'
         ).prefetch_related('approvals__approver').all()
+        employee = getattr(user, 'employee_profile', None) or getattr(user, 'employee', None)
         # Employee can only see own requests
-        if user.role == 'EMPLOYEE' and user.employee:
-            return qs.filter(employee=user.employee)
+        if user.role == 'EMPLOYEE' and employee:
+            return qs.filter(employee=employee)
         if user.role != 'SUPER_ADMIN' and user.entity:
             return qs.filter(employee__entity=user.entity)
         return qs
@@ -95,6 +92,15 @@ class LeaveRequestViewSet(viewsets.ModelViewSet):
         if self.action == 'list':
             return LeaveRequestListSerializer
         return LeaveRequestSerializer
+
+    def perform_create(self, serializer):
+        employee = getattr(self.request.user, 'employee_profile', None) or getattr(self.request.user, 'employee', None)
+        if not employee and self.request.user.role == 'EMPLOYEE':
+            raise serializers.ValidationError('User tidak terhubung ke profil karyawan.')
+        if employee and self.request.user.role == 'EMPLOYEE':
+            serializer.save(employee=employee)
+        else:
+            serializer.save()
 
     @extend_schema(summary='Submit a leave request for approval')
     @action(detail=True, methods=['post'], url_path='submit')
@@ -129,71 +135,85 @@ class LeaveRequestViewSet(viewsets.ModelViewSet):
     @extend_schema(summary='Approve a leave request', request=ApproveRejectSerializer)
     @action(detail=True, methods=['post'], url_path='approve')
     def approve(self, request, pk=None):
-        leave_req = self.get_object()
-        user_emp  = getattr(request.user, 'employee', None)
+        user_emp = getattr(request.user, 'employee_profile', None) or getattr(request.user, 'employee', None)
         if not user_emp:
             return Response({'success': False, 'message': 'User tidak terhubung ke profil karyawan.'}, status=400)
 
-        approval = LeaveApproval.objects.filter(
-            leave_request=leave_req, approver=user_emp, status=LeaveApproval.Status.PENDING
-        ).first()
-        if not approval:
-            return Response({'success': False, 'message': 'Tidak ada permohonan yang perlu disetujui.'}, status=400)
-
-        notes = request.data.get('notes', '')
-        approval.status   = LeaveApproval.Status.APPROVED
-        approval.notes    = notes
-        approval.acted_at = timezone.now()
-        approval.save()
-
-        # Check if all approvals done
-        pending = LeaveApproval.objects.filter(leave_request=leave_req, status=LeaveApproval.Status.PENDING)
-        if not pending.exists():
-            leave_req.status = LeaveRequest.Status.APPROVED
-            leave_req.save(update_fields=['status'])
-            # Update leave balance
+        with transaction.atomic():
             try:
-                balance = LeaveBalance.objects.get(
+                leave_req = LeaveRequest.objects.select_for_update().get(pk=pk)
+            except LeaveRequest.DoesNotExist:
+                return Response({'success': False, 'message': 'Permohonan cuti tidak ditemukan.'}, status=404)
+
+            if leave_req.status != LeaveRequest.Status.PENDING:
+                return Response({'success': False, 'message': 'Permohonan ini tidak sedang menunggu persetujuan.'}, status=400)
+
+            approval = LeaveApproval.objects.filter(
+                leave_request=leave_req, approver=user_emp, status=LeaveApproval.Status.PENDING
+            ).first()
+            if not approval:
+                return Response({'success': False, 'message': 'Tidak ada permohonan yang perlu disetujui.'}, status=400)
+
+            notes = request.data.get('notes', '')
+            approval.status   = LeaveApproval.Status.APPROVED
+            approval.notes    = notes
+            approval.acted_at = timezone.now()
+            approval.save()
+
+            # Check if all approvals done
+            pending = LeaveApproval.objects.filter(leave_request=leave_req, status=LeaveApproval.Status.PENDING)
+            if not pending.exists():
+                leave_req.status = LeaveRequest.Status.APPROVED
+                leave_req.save(update_fields=['status'])
+                # Update leave balance directly with Decimal without int()
+                balance, _ = LeaveBalance.objects.select_for_update().get_or_create(
                     employee=leave_req.employee,
                     leave_type=leave_req.leave_type,
                     year=leave_req.start_date.year,
+                    defaults={'allocated': 0, 'used': 0}
                 )
-                balance.used += int(leave_req.total_days)
+                balance.used += leave_req.total_days
                 balance.save(update_fields=['used'])
-            except LeaveBalance.DoesNotExist:
-                pass
 
         return Response({'success': True, 'message': 'Cuti berhasil disetujui.'})
 
     @extend_schema(summary='Reject a leave request', request=ApproveRejectSerializer)
     @action(detail=True, methods=['post'], url_path='reject')
     def reject(self, request, pk=None):
-        leave_req = self.get_object()
-        user_emp  = getattr(request.user, 'employee', None)
+        user_emp = getattr(request.user, 'employee_profile', None) or getattr(request.user, 'employee', None)
         if not user_emp:
             return Response({'success': False, 'message': 'User tidak terhubung ke profil karyawan.'}, status=400)
 
-        approval = LeaveApproval.objects.filter(
-            leave_request=leave_req, approver=user_emp, status=LeaveApproval.Status.PENDING
-        ).first()
-        if not approval:
-            return Response({'success': False, 'message': 'Tidak ada permohonan yang perlu ditolak.'}, status=400)
+        with transaction.atomic():
+            try:
+                leave_req = LeaveRequest.objects.select_for_update().get(pk=pk)
+            except LeaveRequest.DoesNotExist:
+                return Response({'success': False, 'message': 'Permohonan cuti tidak ditemukan.'}, status=404)
 
-        notes = request.data.get('notes', '')
-        approval.status   = LeaveApproval.Status.REJECTED
-        approval.notes    = notes
-        approval.acted_at = timezone.now()
-        approval.save()
+            if leave_req.status != LeaveRequest.Status.PENDING:
+                return Response({'success': False, 'message': 'Permohonan ini tidak dalam status PENDING.'}, status=400)
 
-        leave_req.status = LeaveRequest.Status.REJECTED
-        leave_req.save(update_fields=['status'])
+            approval = LeaveApproval.objects.filter(
+                leave_request=leave_req, approver=user_emp, status=LeaveApproval.Status.PENDING
+            ).first()
+            if not approval:
+                return Response({'success': False, 'message': 'Tidak ada permohonan yang perlu ditolak.'}, status=400)
+
+            notes = request.data.get('notes', '')
+            approval.status   = LeaveApproval.Status.REJECTED
+            approval.notes    = notes
+            approval.acted_at = timezone.now()
+            approval.save()
+
+            leave_req.status = LeaveRequest.Status.REJECTED
+            leave_req.save(update_fields=['status'])
 
         return Response({'success': True, 'message': 'Cuti berhasil ditolak.'})
 
     @extend_schema(summary='Get leave requests pending your approval')
     @action(detail=False, methods=['get'], url_path='pending-my-approval')
     def pending_my_approval(self, request):
-        user_emp = getattr(request.user, 'employee', None)
+        user_emp = getattr(request.user, 'employee_profile', None) or getattr(request.user, 'employee', None)
         if not user_emp:
             return Response({'data': []})
         pending_ids = LeaveApproval.objects.filter(

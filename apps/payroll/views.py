@@ -1,3 +1,4 @@
+import logging
 from django.utils import timezone
 from rest_framework import viewsets, permissions, status
 from rest_framework.decorators import action
@@ -7,20 +8,15 @@ from django_filters.rest_framework import DjangoFilterBackend
 from rest_framework.filters import SearchFilter, OrderingFilter
 from drf_spectacular.utils import extend_schema
 
+from apps.core.permissions import IsHROrReadOnly
 from apps.core.pagination import StandardResultsPagination
 from .models import SalaryComponent, EmployeeSalaryComponent, OvertimeRecord, PayrollPeriod, PayrollItem
 from .serializers import (
     SalaryComponentSerializer, EmployeeSalaryComponentSerializer,
     OvertimeRecordSerializer, PayrollPeriodSerializer, PayrollItemSerializer,
 )
-from .calculator import calculate_payroll_item
 
-
-class IsHROrReadOnly(permissions.BasePermission):
-    def has_permission(self, request, view):
-        if request.method in permissions.SAFE_METHODS:
-            return request.user.is_authenticated
-        return request.user.is_authenticated and request.user.is_hr
+logger = logging.getLogger(__name__)
 
 
 @extend_schema(tags=['payroll'])
@@ -77,12 +73,19 @@ class OvertimeRecordViewSet(viewsets.ModelViewSet):
     @extend_schema(summary='Bulk import overtime records')
     @action(detail=False, methods=['post'], url_path='bulk-import')
     def bulk_import(self, request):
-        records = request.data if isinstance(request.data, list) else request.data.get('records', [])
-        serializer = OvertimeRecordSerializer(data=records, many=True)
+        records_data = request.data if isinstance(request.data, list) else request.data.get('records', [])
+        serializer = OvertimeRecordSerializer(data=records_data, many=True)
         serializer.is_valid(raise_exception=True)
-        created = OvertimeRecord.objects.bulk_create([
-            OvertimeRecord(**item) for item in serializer.validated_data
-        ])
+
+        instances = []
+        for item in serializer.validated_data:
+            rec = OvertimeRecord(**item)
+            emp = item.get('employee')
+            salary_base = emp.current_salary_base if emp else 0
+            rec.calculate_amount(salary_base)
+            instances.append(rec)
+
+        created = OvertimeRecord.objects.bulk_create(instances)
         return Response({
             'success': True,
             'created': len(created),
@@ -115,55 +118,53 @@ class PayrollPeriodViewSet(viewsets.ModelViewSet):
     def calculate(self, request, pk=None):
         period = self.get_object()
         if period.status == PayrollPeriod.Status.FINALIZED:
-            return Response({'success': False, 'message': 'Periode sudah difinalisasi.'}, status=400)
+            return Response({'success': False, 'message': 'Periode sudah difinalisasi.'}, status=status.HTTP_400_BAD_REQUEST)
 
         period.status = PayrollPeriod.Status.PROCESSING
         period.save(update_fields=['status'])
 
-        # Get all active employees in this entity
-        from apps.employees.models import Employee
-        employees = Employee.objects.filter(entity=period.entity, status='ACTIVE')
-        calculated = 0
-        errors = []
-
-        for emp in employees:
-            try:
-                calculate_payroll_item(period, emp)
-                calculated += 1
-            except Exception as e:
-                errors.append({'employee': emp.full_name, 'error': str(e)})
-
-        period.status = PayrollPeriod.Status.DRAFT
-        period.save(update_fields=['status'])
+        # Offload calculation task to Celery background worker
+        from .tasks import calculate_payroll_period_task
+        calculate_payroll_period_task.delay(period.id)
 
         return Response({
             'success': True,
-            'calculated': calculated,
-            'errors': errors,
-            'message': f'Kalkulasi selesai: {calculated} karyawan diproses.',
-        })
+            'message': 'Kalkulasi payroll sedang diproses di background worker.',
+            'period_id': period.id,
+        }, status=status.HTTP_202_ACCEPTED)
 
     @extend_schema(summary='Finalize payroll period — cannot be undone')
     @action(detail=True, methods=['post'], url_path='finalize')
     def finalize(self, request, pk=None):
         period = self.get_object()
         if period.status == PayrollPeriod.Status.FINALIZED:
-            return Response({'success': False, 'message': 'Periode sudah difinalisasi.'}, status=400)
+            return Response({'success': False, 'message': 'Periode sudah difinalisasi.'}, status=status.HTTP_400_BAD_REQUEST)
         if not period.items.exists():
-            return Response({'success': False, 'message': 'Belum ada item payroll. Jalankan kalkulasi terlebih dahulu.'}, status=400)
+            return Response({'success': False, 'message': 'Belum ada item payroll. Jalankan kalkulasi terlebih dahulu.'}, status=status.HTTP_400_BAD_REQUEST)
 
         period.status       = PayrollPeriod.Status.FINALIZED
         period.finalized_at = timezone.now()
         period.save(update_fields=['status', 'finalized_at'])
 
         # Trigger PDF generation via Celery
+        celery_triggered = False
         try:
             from apps.salary_slip.tasks import generate_salary_slips_for_period
             generate_salary_slips_for_period.delay(period.id)
-        except Exception:
-            pass  # Celery may not be available in all envs
+            celery_triggered = True
+        except Exception as e:
+            logger.warning('Gagal memicu Celery task generate_salary_slips: %s', e)
 
-        return Response({'success': True, 'message': 'Periode payroll berhasil difinalisasi. Slip gaji sedang digenerate.'})
+        msg = 'Periode payroll berhasil difinalisasi.'
+        if celery_triggered:
+            msg += ' Slip gaji sedang digenerate.'
+        else:
+            msg += ' Task generate slip gaji gagal di-enqueue.'
+
+        return Response(
+            {'success': True, 'message': msg},
+            status=status.HTTP_200_OK if celery_triggered else status.HTTP_207_MULTI_STATUS
+        )
 
     @extend_schema(summary='Get all payroll items for this period')
     @action(detail=True, methods=['get'], url_path='items')

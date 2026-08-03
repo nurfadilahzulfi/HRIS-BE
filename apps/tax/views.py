@@ -3,17 +3,11 @@ from rest_framework.decorators import action
 from rest_framework.response import Response
 from drf_spectacular.utils import extend_schema
 
+from apps.core.permissions import IsHROrReadOnly
 from apps.core.pagination import StandardResultsPagination
 from .models import PTKP, PPh21Bracket, TaxCalculationLog
 from .serializers import PTKPSerializer, PPh21BracketSerializer, TaxCalculationLogSerializer, PPh21SimulateSerializer
 from .engine import calculate_pph21
-
-
-class IsHROrReadOnly(permissions.BasePermission):
-    def has_permission(self, request, view):
-        if request.method in permissions.SAFE_METHODS:
-            return request.user.is_authenticated
-        return request.user.is_authenticated and request.user.is_hr
 
 
 @extend_schema(tags=['tax'])

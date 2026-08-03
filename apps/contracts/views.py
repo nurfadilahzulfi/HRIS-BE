@@ -1,3 +1,4 @@
+from django.db import transaction
 from django.utils import timezone
 from rest_framework import viewsets, permissions, status
 from rest_framework.decorators import action
@@ -7,6 +8,7 @@ from django_filters.rest_framework import DjangoFilterBackend
 from rest_framework.filters import SearchFilter, OrderingFilter
 from drf_spectacular.utils import extend_schema, OpenApiParameter
 
+from apps.core.permissions import IsHROrReadOnly
 from apps.core.pagination import StandardResultsPagination
 from .models import Contract, ContractRenewal
 from .serializers import (
@@ -15,13 +17,6 @@ from .serializers import (
     ContractRenewalSerializer,
     RenewContractSerializer,
 )
-
-
-class IsHROrReadOnly(permissions.BasePermission):
-    def has_permission(self, request, view):
-        if request.method in permissions.SAFE_METHODS:
-            return request.user.is_authenticated
-        return request.user.is_authenticated and request.user.is_hr
 
 
 @extend_schema(tags=['contracts'])
@@ -55,31 +50,41 @@ class ContractViewSet(viewsets.ModelViewSet):
     )
     @action(detail=True, methods=['post'], url_path='renew', parser_classes=[MultiPartParser, FormParser, JSONParser])
     def renew(self, request, pk=None):
-        contract = self.get_object()
+        old_contract = self.get_object()
         serializer = RenewContractSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         data = serializer.validated_data
 
-        # Create renewal record
-        renewal = ContractRenewal.objects.create(
-            original_contract=contract,
-            new_end_date=data['new_end_date'],
-            new_salary_base=data.get('new_salary_base'),
-            document=data.get('document'),
-            notes=data.get('notes', ''),
-            renewed_by=request.user,
-        )
+        with transaction.atomic():
+            # Mark old contract as RENEWED
+            old_contract.status = Contract.Status.RENEWED
+            old_contract.save(update_fields=['status'])
 
-        # Update original contract
-        contract.end_date = data['new_end_date']
-        if data.get('new_salary_base'):
-            contract.salary_base = data['new_salary_base']
-        contract.status = Contract.Status.RENEWED
-        contract.save(update_fields=['end_date', 'salary_base', 'status'])
+            # Create new ACTIVE contract for employee
+            new_salary = data.get('new_salary_base') or old_contract.salary_base
+            new_contract = Contract.objects.create(
+                employee=old_contract.employee,
+                contract_type=old_contract.contract_type,
+                start_date=old_contract.end_date,
+                end_date=data['new_end_date'],
+                salary_base=new_salary,
+                status=Contract.Status.ACTIVE,
+            )
+
+            # Create renewal audit record linked to original contract
+            renewal = ContractRenewal.objects.create(
+                original_contract=old_contract,
+                new_end_date=data['new_end_date'],
+                new_salary_base=new_salary,
+                document=data.get('document'),
+                notes=data.get('notes', ''),
+                renewed_by=request.user,
+            )
 
         return Response({
             'success': True,
-            'message': 'Kontrak berhasil diperbarui.',
+            'message': 'Kontrak berhasil diperbarui dengan membuat kontrak aktif baru.',
+            'new_contract_id': new_contract.id,
             'renewal': ContractRenewalSerializer(renewal).data,
         })
 

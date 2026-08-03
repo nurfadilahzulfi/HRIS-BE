@@ -1,3 +1,4 @@
+from django.db import models
 from django.utils import timezone
 from rest_framework import viewsets, permissions, status
 from rest_framework.decorators import action
@@ -7,6 +8,7 @@ from django_filters.rest_framework import DjangoFilterBackend
 from rest_framework.filters import SearchFilter, OrderingFilter
 from drf_spectacular.utils import extend_schema, OpenApiParameter
 
+from apps.core.permissions import IsHROrReadOnly
 from apps.core.pagination import StandardResultsPagination
 from apps.employees.models import Employee
 from .models import WorkSchedule, EmployeeSchedule, AttendanceLog
@@ -16,13 +18,6 @@ from .serializers import (
     AttendanceLogSerializer,
     AttendanceSyncSerializer,
 )
-
-
-class IsHROrReadOnly(permissions.BasePermission):
-    def has_permission(self, request, view):
-        if request.method in permissions.SAFE_METHODS:
-            return request.user.is_authenticated
-        return request.user.is_authenticated and request.user.is_hr
 
 
 @extend_schema(tags=['attendance'])
@@ -72,6 +67,9 @@ class AttendanceLogViewSet(viewsets.ModelViewSet):
     def get_queryset(self):
         user = self.request.user
         qs = AttendanceLog.objects.select_related('employee').all()
+        employee = getattr(user, 'employee_profile', None) or getattr(user, 'employee', None)
+        if user.role == 'EMPLOYEE' and employee:
+            return qs.filter(employee=employee)
         if user.role != 'SUPER_ADMIN' and user.entity:
             qs = qs.filter(employee__entity=user.entity)
         return qs
@@ -80,11 +78,11 @@ class AttendanceLogViewSet(viewsets.ModelViewSet):
         summary='Sync attendance from finger machine / middleware',
         request=AttendanceSyncSerializer,
     )
-    @action(detail=False, methods=['post'], url_path='sync', permission_classes=[permissions.IsAuthenticated])
+    @action(detail=False, methods=['post'], url_path='sync', permission_classes=[IsHROrReadOnly])
     def sync(self, request):
         """
         API-agnostic endpoint: accepts attendance data from any finger machine
-        middleware or external system via POST.
+        middleware or external system via POST. Requires HR permission.
         """
         serializer = AttendanceSyncSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
@@ -130,13 +128,13 @@ class AttendanceLogViewSet(viewsets.ModelViewSet):
             'employee_id may be the Employee ID string (e.g. HO-2024-0001) or NIK.'
         ),
     )
-    @action(detail=False, methods=['post'], url_path='import', permission_classes=[permissions.IsAuthenticated])
+    @action(detail=False, methods=['post'], url_path='import', permission_classes=[IsHROrReadOnly])
     def bulk_import(self, request):
-        """POST /api/attendance/logs/import/ — bulk upsert attendance records."""
+        """POST /api/attendance/logs/import/ — bulk upsert attendance records. Requires HR permission."""
         records = request.data if isinstance(request.data, list) else request.data.get('records', [])
 
         if not records:
-            return Response({'success': False, 'message': 'Tidak ada data untuk diimport.'}, status=400)
+            return Response({'success': False, 'message': 'Tidak ada data untuk diimport.'}, status=status.HTTP_400_BAD_REQUEST)
 
         imported, skipped, errors = 0, 0, []
 
@@ -205,7 +203,7 @@ class AttendanceLogViewSet(viewsets.ModelViewSet):
 
         total_days     = qs.count()
         late_days      = qs.filter(late_minutes__gt=0).count()
-        total_late_min = sum(a.late_minutes for a in qs)
+        total_late_min = qs.aggregate(total=models.Sum('late_minutes'))['total'] or 0
 
         return Response({
             'success': True,

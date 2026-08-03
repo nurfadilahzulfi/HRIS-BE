@@ -50,6 +50,34 @@ class LogoutView(APIView):
             )
 
 
+class LogoutAllView(APIView):
+    """
+    POST /api/v1/auth/logout-all/
+    Blacklist all active refresh tokens for the current user (logout from all devices).
+    """
+    permission_classes = [permissions.IsAuthenticated]
+
+    @extend_schema(tags=['auth'], summary='Logout from all devices')
+    def post(self, request):
+        try:
+            from rest_framework_simplejwt.token_blacklist.models import OutstandingToken, BlacklistedToken
+            tokens = OutstandingToken.objects.filter(user=request.user)
+            count = 0
+            for token in tokens:
+                _, created = BlacklistedToken.objects.get_or_create(token=token)
+                if created:
+                    count += 1
+            return Response({
+                'success': True,
+                'message': f'Logout dari seluruh perangkat berhasil. {count} token telah di-blacklist.'
+            })
+        except Exception as e:
+            return Response(
+                {'success': False, 'message': str(e)},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+
 class MeView(APIView):
     """
     GET  /api/v1/auth/me/  → current user profile

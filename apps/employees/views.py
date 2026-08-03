@@ -1,4 +1,4 @@
-from rest_framework import viewsets, permissions, status
+from rest_framework import viewsets, status
 from rest_framework.decorators import action
 from rest_framework.response import Response
 from rest_framework.parsers import MultiPartParser, FormParser, JSONParser
@@ -6,6 +6,7 @@ from django_filters.rest_framework import DjangoFilterBackend
 from rest_framework.filters import SearchFilter, OrderingFilter
 from drf_spectacular.utils import extend_schema, OpenApiParameter
 
+from apps.core.permissions import IsHROrReadOnly
 from apps.core.pagination import StandardResultsPagination
 from .models import Department, Position, Employee
 from .serializers import (
@@ -15,14 +16,6 @@ from .serializers import (
     EmployeeDetailSerializer,
     OrgChartSerializer,
 )
-
-
-class IsHROrReadOnly(permissions.BasePermission):
-    """HR and above can write; authenticated users can read."""
-    def has_permission(self, request, view):
-        if request.method in permissions.SAFE_METHODS:
-            return request.user.is_authenticated
-        return request.user.is_authenticated and request.user.is_hr
 
 
 @extend_schema(tags=['departments'])
@@ -102,7 +95,7 @@ class EmployeeViewSet(viewsets.ModelViewSet):
     @action(detail=True, methods=['get'], url_path='subordinates')
     def subordinates(self, request, pk=None):
         employee = self.get_object()
-        subs = employee.subordinates.filter(status='ACTIVE').select_related(
+        subs = employee.subordinates.filter(status=Employee.Status.ACTIVE).select_related(
             'department', 'position'
         )
         serializer = EmployeeListSerializer(subs, many=True, context={'request': request})
@@ -116,10 +109,19 @@ class EmployeeViewSet(viewsets.ModelViewSet):
     @action(detail=True, methods=['post'], url_path='terminate')
     def terminate(self, request, pk=None):
         employee = self.get_object()
-        if not request.user.is_hr:
-            return Response({'success': False, 'message': 'Tidak memiliki akses.'}, status=403)
         employee.status = Employee.Status.TERMINATED
         from django.utils import timezone
         employee.resign_date = timezone.now().date()
         employee.save(update_fields=['status', 'resign_date'])
+
+        # Blacklist all JWT tokens for terminated employee's user account
+        if hasattr(employee, 'user') and employee.user:
+            try:
+                from rest_framework_simplejwt.token_blacklist.models import OutstandingToken, BlacklistedToken
+                tokens = OutstandingToken.objects.filter(user=employee.user)
+                for t in tokens:
+                    BlacklistedToken.objects.get_or_create(token=t)
+            except Exception:
+                pass
+
         return Response({'success': True, 'message': f'{employee.full_name} telah di-terminate.'})

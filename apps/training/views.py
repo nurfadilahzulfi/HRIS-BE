@@ -1,3 +1,4 @@
+from django.db import transaction
 from rest_framework import viewsets, permissions, status
 from rest_framework.decorators import action
 from rest_framework.response import Response
@@ -5,17 +6,11 @@ from django_filters.rest_framework import DjangoFilterBackend
 from rest_framework.filters import SearchFilter, OrderingFilter
 from drf_spectacular.utils import extend_schema, OpenApiParameter
 
+from apps.core.permissions import IsHROrReadOnly
 from apps.core.pagination import StandardResultsPagination
 from apps.employees.models import Employee
 from .models import TrainingCategory, TrainingProgram, TrainingParticipant
 from .serializers import TrainingCategorySerializer, TrainingProgramSerializer, TrainingParticipantSerializer
-
-
-class IsHROrReadOnly(permissions.BasePermission):
-    def has_permission(self, request, view):
-        if request.method in permissions.SAFE_METHODS:
-            return request.user.is_authenticated
-        return request.user.is_authenticated and request.user.is_hr
 
 
 def _build_kpi_snapshot_helper(employee):
@@ -93,35 +88,41 @@ class TrainingProgramViewSet(viewsets.ModelViewSet):
     )
     @action(detail=True, methods=['post'], url_path='register', permission_classes=[permissions.IsAuthenticated])
     def register(self, request, pk=None):
-        program = self.get_object()
         emp_id = request.data.get('employee_id')
+        user_emp = getattr(request.user, 'employee_profile', None) or getattr(request.user, 'employee', None)
 
         if emp_id:
+            if not request.user.is_hr:
+                return Response({'success': False, 'message': 'Hanya HR yang dapat mendaftarkan karyawan lain.'}, status=status.HTTP_403_FORBIDDEN)
             try:
                 employee = Employee.objects.get(id=emp_id)
             except Employee.DoesNotExist:
                 return Response({'success': False, 'message': 'Karyawan tidak ditemukan.'}, status=status.HTTP_404_NOT_FOUND)
         else:
-            employee = getattr(request.user, 'employee', None)
+            employee = user_emp
             if not employee:
                 return Response({'success': False, 'message': 'Akun Anda tidak terhubung dengan data Karyawan.'}, status=status.HTTP_400_BAD_REQUEST)
 
-        # Check max participants
-        if program.max_participants and program.participants.count() >= program.max_participants:
-            return Response({'success': False, 'message': 'Kuota pelatihan sudah penuh.'}, status=status.HTTP_400_BAD_REQUEST)
+        with transaction.atomic():
+            try:
+                program = TrainingProgram.objects.select_for_update().get(pk=pk)
+            except TrainingProgram.DoesNotExist:
+                return Response({'success': False, 'message': 'Program pelatihan tidak ditemukan.'}, status=status.HTTP_404_NOT_FOUND)
 
-        # Check existing registration
-        participant, created = TrainingParticipant.objects.get_or_create(
-            program=program,
-            employee=employee,
-            defaults={
-                'status': 'REGISTERED',
-                'kpi_snapshot': _build_kpi_snapshot_helper(employee)
-            }
-        )
+            if program.max_participants and program.participants.count() >= program.max_participants:
+                return Response({'success': False, 'message': 'Kuota pelatihan sudah penuh.'}, status=status.HTTP_400_BAD_REQUEST)
 
-        if not created:
-            return Response({'success': False, 'message': 'Karyawan sudah terdaftar dalam pelatihan ini.'}, status=status.HTTP_400_BAD_REQUEST)
+            participant, created = TrainingParticipant.objects.get_or_create(
+                program=program,
+                employee=employee,
+                defaults={
+                    'status': 'REGISTERED',
+                    'kpi_snapshot': _build_kpi_snapshot_helper(employee)
+                }
+            )
+
+            if not created:
+                return Response({'success': False, 'message': 'Karyawan sudah terdaftar dalam pelatihan ini.'}, status=status.HTTP_400_BAD_REQUEST)
 
         return Response({
             'success': True,
@@ -142,8 +143,9 @@ class TrainingParticipantViewSet(viewsets.ModelViewSet):
     def get_queryset(self):
         user = self.request.user
         qs = TrainingParticipant.objects.select_related('program', 'employee').all()
-        if user.role == 'EMPLOYEE' and user.employee:
-            return qs.filter(employee=user.employee)
+        employee = getattr(user, 'employee_profile', None) or getattr(user, 'employee', None)
+        if user.role == 'EMPLOYEE' and employee:
+            return qs.filter(employee=employee)
         if user.role != 'SUPER_ADMIN' and user.entity:
             qs = qs.filter(program__entity=user.entity)
         return qs
@@ -156,7 +158,7 @@ class TrainingParticipantViewSet(viewsets.ModelViewSet):
     @extend_schema(summary='Get my training history')
     @action(detail=False, methods=['get'], url_path='me', permission_classes=[permissions.IsAuthenticated])
     def my_trainings(self, request):
-        user_emp = getattr(request.user, 'employee', None)
+        user_emp = getattr(request.user, 'employee_profile', None) or getattr(request.user, 'employee', None)
         if not user_emp:
             return Response({'success': True, 'count': 0, 'data': []})
 

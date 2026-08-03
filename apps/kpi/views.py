@@ -1,3 +1,5 @@
+from decimal import Decimal, ROUND_HALF_UP
+from django.db import transaction
 from rest_framework import viewsets, permissions, status
 from rest_framework.decorators import action
 from rest_framework.response import Response
@@ -6,19 +8,13 @@ from rest_framework.filters import SearchFilter
 from drf_spectacular.utils import extend_schema, OpenApiParameter
 from django.db.models import Avg, Count
 
+from apps.core.permissions import IsHROrReadOnly, IsManagerOrHR
 from apps.core.pagination import StandardResultsPagination
 from .models import KPITemplate, KPIItem, EmployeeKPIAssignment, EmployeeKPIResultItem
 from .serializers import (
     KPITemplateSerializer, KPIItemSerializer,
     EmployeeKPIAssignmentSerializer, EmployeeKPIResultItemSerializer
 )
-
-
-class IsHROrReadOnly(permissions.BasePermission):
-    def has_permission(self, request, view):
-        if request.method in permissions.SAFE_METHODS:
-            return request.user.is_authenticated
-        return request.user.is_authenticated and request.user.is_hr
 
 
 @extend_schema(tags=['kpi'])
@@ -57,6 +53,11 @@ class EmployeeKPIAssignmentViewSet(viewsets.ModelViewSet):
     filter_backends = [DjangoFilterBackend]
     filterset_fields = ['employee', 'template', 'period_year', 'status', 'context', 'related_training']
 
+    def get_permissions(self):
+        if self.action in ['evaluate', 'create', 'update', 'partial_update', 'destroy']:
+            return [IsManagerOrHR()]
+        return super().get_permissions()
+
     def get_queryset(self):
         user = self.request.user
         qs = EmployeeKPIAssignment.objects.select_related('template', 'employee').prefetch_related('results__kpi_item').all()
@@ -73,33 +74,39 @@ class EmployeeKPIAssignmentViewSet(viewsets.ModelViewSet):
         results_data = request.data.get('results', [])  # list of {kpi_item_id: X, actual_achievement: Y}
         notes = request.data.get('evaluator_notes', '')
 
-        total_weighted_score = 0
-        for res in results_data:
-            item_id = res.get('kpi_item_id')
-            actual = float(res.get('actual_achievement', 0))
-            try:
-                kpi_item = KPIItem.objects.get(id=item_id, template=assignment.template)
-                target = float(kpi_item.target)
-                weight = float(kpi_item.weight)
-                pct_achieved = (actual / target) if target > 0 else 0
-                item_score = min(pct_achieved * weight, weight * 1.2)  # capped at 120% per item
+        with transaction.atomic():
+            total_weighted_score = Decimal('0.00')
+            for res in results_data:
+                item_id = res.get('kpi_item_id')
+                try:
+                    actual = Decimal(str(res.get('actual_achievement', 0)))
+                except Exception:
+                    actual = Decimal('0.00')
 
-                EmployeeKPIResultItem.objects.update_or_create(
-                    assignment=assignment,
-                    kpi_item=kpi_item,
-                    defaults={
-                        'actual_achievement': actual,
-                        'score': round(item_score, 2)
-                    }
-                )
-                total_weighted_score += item_score
-            except KPIItem.DoesNotExist:
-                continue
+                try:
+                    kpi_item = KPIItem.objects.get(id=item_id, template=assignment.template)
+                    target = Decimal(str(kpi_item.target))
+                    weight = Decimal(str(kpi_item.weight))
+                    pct_achieved = (actual / target) if target > Decimal('0.00') else Decimal('0.00')
+                    cap = weight * Decimal('1.20')
+                    item_score = min(pct_achieved * weight, cap)
 
-        assignment.final_score = round(total_weighted_score, 2)
-        assignment.evaluator_notes = notes
-        assignment.status = EmployeeKPIAssignment.Status.FINAL
-        assignment.save(update_fields=['final_score', 'evaluator_notes', 'status'])
+                    EmployeeKPIResultItem.objects.update_or_create(
+                        assignment=assignment,
+                        kpi_item=kpi_item,
+                        defaults={
+                            'actual_achievement': actual,
+                            'score': item_score.quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
+                        }
+                    )
+                    total_weighted_score += item_score
+                except KPIItem.DoesNotExist:
+                    continue
+
+            assignment.final_score = total_weighted_score.quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
+            assignment.evaluator_notes = notes
+            assignment.status = EmployeeKPIAssignment.Status.FINAL
+            assignment.save(update_fields=['final_score', 'evaluator_notes', 'status'])
 
         return Response({
             'success': True,
