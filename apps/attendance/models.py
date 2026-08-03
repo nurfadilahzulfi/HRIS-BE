@@ -57,7 +57,7 @@ class AttendanceLog(models.Model):
 
     employee      = models.ForeignKey(
         'employees.Employee',
-        on_delete=models.CASCADE,
+        on_delete=models.PROTECT,
         related_name='attendance_logs',
         verbose_name='Karyawan',
     )

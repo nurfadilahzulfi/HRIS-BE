@@ -17,7 +17,7 @@ class DepartmentSerializer(serializers.ModelSerializer):
         read_only_fields = ['id', 'created_at']
 
     def get_employee_count(self, obj):
-        return obj.employees.filter(status='ACTIVE').count()
+        return obj.employees.filter(status=Employee.Status.ACTIVE).count()
 
 
 class PositionSerializer(serializers.ModelSerializer):
@@ -85,7 +85,7 @@ class EmployeeDetailSerializer(serializers.ModelSerializer):
 
 
 class OrgChartSerializer(serializers.ModelSerializer):
-    """Recursive serializer for org chart tree."""
+    """Recursive serializer for org chart tree with cycle protection."""
     subordinates = serializers.SerializerMethodField()
     position_name   = serializers.CharField(source='position.name', read_only=True, default=None)
     department_name = serializers.CharField(source='department.name', read_only=True, default=None)
@@ -98,5 +98,11 @@ class OrgChartSerializer(serializers.ModelSerializer):
         ]
 
     def get_subordinates(self, obj):
-        subs = obj.subordinates.filter(status='ACTIVE').select_related('position', 'department')
+        visited = self.context.get('visited', set())
+        if obj.pk in visited:
+            return []
+        visited.add(obj.pk)
+        self.context['visited'] = visited
+
+        subs = obj.subordinates.filter(status=Employee.Status.ACTIVE).select_related('position', 'department')
         return OrgChartSerializer(subs, many=True, context=self.context).data

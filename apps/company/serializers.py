@@ -29,6 +29,15 @@ class EntitySerializer(serializers.ModelSerializer):
         ]
         read_only_fields = ['created_at', 'updated_at']
 
+    def validate_employee_id_format(self, value):
+        required_placeholders = ['{ENTITY_CODE}', '{YEAR}', '{SEQ}']
+        missing = [p for p in required_placeholders if p not in value]
+        if missing:
+            raise serializers.ValidationError(
+                f"Format ID Karyawan harus mengandung placeholder: {', '.join(missing)}"
+            )
+        return value
+
 
 class EntityListSerializer(serializers.ModelSerializer):
     """Lightweight serializer for nested/list use."""

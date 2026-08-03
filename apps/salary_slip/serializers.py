@@ -26,6 +26,19 @@ class SalarySlipSerializer(serializers.ModelSerializer):
         ]
         read_only_fields = ['id', 'slip_number', 'generated_at', 'is_sent', 'sent_at', 'created_at']
 
+    def validate_payroll_item(self, payroll_item):
+        """
+        Pastikan payroll_item yang dijadikan slip berasal dari entity yang sama
+        dengan user yang membuat, bukan milik karyawan dari entity lain.
+        """
+        request = self.context.get('request')
+        if request and request.user and request.user.entity_id:
+            if payroll_item.employee.entity_id != request.user.entity_id:
+                raise serializers.ValidationError(
+                    "Tidak diizinkan membuat slip untuk karyawan dari entitas berbeda."
+                )
+        return payroll_item
+
     def get_period_label(self, obj):
         p = obj.payroll_item.period
         return f'{p.month:02d}/{p.year}'

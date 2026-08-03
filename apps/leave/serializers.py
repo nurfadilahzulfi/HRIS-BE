@@ -18,7 +18,7 @@ class LeaveTypeSerializer(serializers.ModelSerializer):
 class LeaveBalanceSerializer(serializers.ModelSerializer):
     employee_name  = serializers.CharField(source='employee.full_name', read_only=True)
     leave_type_name = serializers.CharField(source='leave_type.name', read_only=True)
-    remaining      = serializers.IntegerField(read_only=True)
+    remaining      = serializers.DecimalField(max_digits=5, decimal_places=1, read_only=True)
 
     class Meta:
         model  = LeaveBalance
@@ -52,6 +52,19 @@ class LeaveRequestSerializer(serializers.ModelSerializer):
             'approvals', 'created_at', 'updated_at',
         ]
         read_only_fields = ['id', 'status', 'submitted_at', 'created_at', 'updated_at']
+
+    def validate(self, attrs):
+        start = attrs.get('start_date', getattr(self.instance, 'start_date', None))
+        end = attrs.get('end_date', getattr(self.instance, 'end_date', None))
+        is_halfday = attrs.get('is_halfday', getattr(self.instance, 'is_halfday', False))
+
+        if start and end:
+            if is_halfday:
+                attrs['total_days'] = 0.5
+            else:
+                delta = (end - start).days + 1
+                attrs['total_days'] = max(delta, 0)
+        return attrs
 
 
 class LeaveRequestListSerializer(serializers.ModelSerializer):

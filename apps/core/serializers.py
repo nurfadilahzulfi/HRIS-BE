@@ -38,7 +38,7 @@ class CustomTokenObtainPairSerializer(TokenObtainPairSerializer):
 class UserMeSerializer(serializers.ModelSerializer):
     """Serializer for /auth/me/ endpoint."""
     full_name   = serializers.CharField(read_only=True)
-    employee_id = serializers.IntegerField(source='employee.id', read_only=True)
+    employee_id = serializers.IntegerField(source='employee_profile.id', read_only=True, default=None)
 
     class Meta:
         model  = User
@@ -67,4 +67,13 @@ class ChangePasswordSerializer(serializers.Serializer):
         user = self.context['request'].user
         user.set_password(self.validated_data['new_password'])
         user.save()
+
+        # Blacklist all active refresh tokens for this user upon password change
+        try:
+            from rest_framework_simplejwt.token_blacklist.models import OutstandingToken, BlacklistedToken
+            for outstanding in OutstandingToken.objects.filter(user=user):
+                BlacklistedToken.objects.get_or_create(token=outstanding)
+        except Exception:
+            pass
+
         return user

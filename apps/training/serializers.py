@@ -2,6 +2,9 @@ from rest_framework import serializers
 from .models import TrainingCategory, TrainingProgram, TrainingParticipant
 
 
+from django.core.validators import MinValueValidator, MaxValueValidator
+
+
 class TrainingCategorySerializer(serializers.ModelSerializer):
     entity_name = serializers.CharField(source='entity.name', read_only=True)
 
@@ -13,14 +16,26 @@ class TrainingCategorySerializer(serializers.ModelSerializer):
 
 class TrainingParticipantSerializer(serializers.ModelSerializer):
     employee_name = serializers.CharField(source='employee.full_name', read_only=True)
+    score = serializers.DecimalField(
+        max_digits=5, decimal_places=2, required=False, allow_null=True,
+        validators=[MinValueValidator(0), MaxValueValidator(100)]
+    )
 
     class Meta:
         model = TrainingParticipant
         fields = [
             'id', 'program', 'employee', 'employee_name', 'status', 'attendance',
-            'score', 'kpi_snapshot', 'certificate', 'notes', 'registered_at', 'created_at'
+            'score', 'kpi_snapshot', 'certificate', 'notes', 'registered_at'
         ]
-        read_only_fields = ['id', 'kpi_snapshot', 'registered_at', 'created_at']
+        read_only_fields = ['id', 'kpi_snapshot', 'registered_at']
+
+    def validate(self, attrs):
+        attendance = attrs.get('attendance', getattr(self.instance, 'attendance', None))
+        status = attrs.get('status', getattr(self.instance, 'status', None))
+
+        if attendance == TrainingParticipant.Attendance.ABSENT and status == TrainingParticipant.Status.PASSED:
+            raise serializers.ValidationError("Peserta yang tidak hadir (ABSENT) tidak dapat dinyatakan LULUS.")
+        return attrs
 
 
 class TrainingProgramSerializer(serializers.ModelSerializer):
@@ -39,5 +54,5 @@ class TrainingProgramSerializer(serializers.ModelSerializer):
         read_only_fields = ['id', 'created_at']
 
     def get_participants_count(self, obj):
-        return obj.participants.count()
+        return obj.participants.exclude(status=TrainingParticipant.Status.CANCELLED).count()
 

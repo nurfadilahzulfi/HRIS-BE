@@ -114,25 +114,40 @@ class OvertimeRecord(models.Model):
         """
         Hitung lembur sesuai Kepmenakertrans No. 102/2004.
         PENTING: seluruh aritmatika memakai Decimal untuk presisi finansial.
+
+        self.rate_multiplier digunakan sebagai base multiplier pertama (default 1.5).
+        Jam berikutnya mengikuti progresivitas regulasi relatif terhadap rate_multiplier:
+          - Hari kerja  : jam ke-1 = rate_multiplier×, jam ke-2+ = (rate_multiplier+0.5)×
+          - Akhir pekan : jam 1-8 = (rate_multiplier+0.5)×, jam 9 = (rate_multiplier+1.5)×,
+                          jam 10+ = (rate_multiplier+2.5)×
+        Catatan: rate_multiplier default 1.5 sesuai standar Kepmenakertrans 102/2004.
         """
         if not isinstance(monthly_salary, Decimal):
             monthly_salary = Decimal(str(monthly_salary))
 
-        hourly_rate = monthly_salary / Decimal("173")
-        hours = Decimal(str(self.hours_worked))
+        hourly_rate   = monthly_salary / Decimal("173")
+        hours         = Decimal(str(self.hours_worked))
+        base_mult     = Decimal(str(self.rate_multiplier))   # field di DB, sudah ada di memori
+        next_mult     = base_mult + Decimal("0.5")           # jam ke-2+ hari kerja
+        weekend_mult2 = base_mult + Decimal("1.5")           # jam ke-9 akhir pekan
+        weekend_mult3 = base_mult + Decimal("2.5")           # jam ke-10+ akhir pekan
 
         if self.overtime_type == self.OvertimeType.WEEKDAY:
             if hours <= Decimal("1"):
-                total = hourly_rate * Decimal("1.5") * hours
+                total = hourly_rate * base_mult * hours
             else:
-                total = (hourly_rate * Decimal("1.5")) + (hourly_rate * Decimal("2") * (hours - Decimal("1")))
+                total = (hourly_rate * base_mult) + (hourly_rate * next_mult * (hours - Decimal("1")))
         else:  # WEEKEND / HOLIDAY
             if hours <= Decimal("8"):
-                total = hourly_rate * Decimal("2") * hours
+                total = hourly_rate * next_mult * hours
             elif hours == Decimal("9"):
-                total = (hourly_rate * Decimal("2") * Decimal("8")) + (hourly_rate * Decimal("3"))
+                total = (hourly_rate * next_mult * Decimal("8")) + (hourly_rate * weekend_mult2)
             else:
-                total = (hourly_rate * Decimal("2") * Decimal("8")) + (hourly_rate * Decimal("3")) + (hourly_rate * Decimal("4") * (hours - Decimal("9")))
+                total = (
+                    (hourly_rate * next_mult * Decimal("8"))
+                    + (hourly_rate * weekend_mult2)
+                    + (hourly_rate * weekend_mult3 * (hours - Decimal("9")))
+                )
 
         return total.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
 

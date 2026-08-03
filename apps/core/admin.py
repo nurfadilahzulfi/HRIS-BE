@@ -82,16 +82,11 @@ class UserAdmin(BaseUserAdmin):
 
     def save_formset(self, request, form, formset, change):
         """
-        After saving the inline Employee, automatically sync User.employee FK
-        back to the newly created/updated Employee so both sides of the link
-        are always in sync.
+        After saving inline Employee, formset handles assigning Employee.user FK.
         """
         instances = formset.save(commit=False)
         for instance in instances:
+            if not getattr(instance, 'user_id', None):
+                instance.user = form.instance
             instance.save()
-            # Sync the reverse FK on User so `user.employee` also works
-            user = form.instance
-            if user.employee_id != instance.pk:
-                user.employee = instance
-                user.save(update_fields=['employee'])
         formset.save_m2m()

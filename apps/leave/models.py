@@ -55,9 +55,9 @@ class LeaveBalance(models.Model):
         verbose_name='Jenis Cuti',
     )
     year        = models.PositiveSmallIntegerField(verbose_name='Tahun')
-    allocated   = models.PositiveSmallIntegerField(default=0, verbose_name='Alokasi (hari)')
-    used        = models.PositiveSmallIntegerField(default=0, verbose_name='Terpakai (hari)')
-    carry_forward = models.PositiveSmallIntegerField(default=0, verbose_name='Carry Forward (hari)')
+    allocated   = models.DecimalField(max_digits=5, decimal_places=1, default=0, verbose_name='Alokasi (hari)')
+    used        = models.DecimalField(max_digits=5, decimal_places=1, default=0, verbose_name='Terpakai (hari)')
+    carry_forward = models.DecimalField(max_digits=5, decimal_places=1, default=0, verbose_name='Carry Forward (hari)')
 
     class Meta:
         verbose_name        = 'Leave Balance'

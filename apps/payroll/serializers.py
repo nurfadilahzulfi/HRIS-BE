@@ -54,10 +54,21 @@ class PayrollPeriodSerializer(serializers.ModelSerializer):
             'finalized_at', 'created_by', 'created_by_name',
             'items_count', 'created_at', 'updated_at',
         ]
-        read_only_fields = ['id', 'finalized_at', 'created_at', 'updated_at']
+        read_only_fields = ['id', 'status', 'finalized_at', 'created_at', 'updated_at']
 
     def get_items_count(self, obj):
         return obj.items.count()
+
+
+class FinalizePayrollPeriodSerializer(serializers.Serializer):
+    """Input serializer for POST /api/payroll/periods/{id}/finalize/"""
+    confirm = serializers.BooleanField(default=True)
+
+    def validate(self, attrs):
+        period = self.context.get('payroll_period')
+        if period and period.items.count() == 0:
+            raise serializers.ValidationError("Belum ada PayrollItem untuk periode ini.")
+        return attrs
 
 
 class PayrollItemSerializer(serializers.ModelSerializer):
@@ -78,7 +89,15 @@ class PayrollItemSerializer(serializers.ModelSerializer):
             'pph21_amount', 'total_deductions', 'net_salary',
             'breakdown', 'calculated_at', 'updated_at',
         ]
-        read_only_fields = ['id', 'calculated_at', 'updated_at']
+        read_only_fields = [
+            'id', 'basic_salary', 'total_allowances', 'total_overtime', 'gross_salary',
+            'bpjs_kes_employee', 'bpjs_kes_employer',
+            'bpjs_jkk_employer', 'bpjs_jkm_employer',
+            'bpjs_jht_employee', 'bpjs_jht_employer',
+            'bpjs_jp_employee',  'bpjs_jp_employer',
+            'pph21_amount', 'total_deductions', 'net_salary',
+            'breakdown', 'calculated_at', 'updated_at',
+        ]
 
     def get_period_label(self, obj):
         return f'{obj.period.month:02d}/{obj.period.year}'
